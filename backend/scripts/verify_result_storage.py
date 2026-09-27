@@ -1,5 +1,6 @@
-"""Day 1: compare the hardcoded pair with Claude, store the result, and read it back.
+"""Day 1: compare a manually chosen pair with Claude, store the result, and read it back.
 
+Takes the same --a/--b/--phrase/--phrase-a/--phrase-b options as verify_claude_comparison.py.
 Each run adds a new contradiction_results row; the candidate pair is reused if it exists.
 """
 
@@ -16,15 +17,16 @@ from app.services.result_storage import (  # noqa: E402
     get_or_create_candidate_pair,
     store_contradiction_result,
 )
-from verify_claude_comparison import PAIR_FILENAMES, load_chunk, to_statement  # noqa: E402
+from verify_claude_comparison import load_pair, parse_pair_args, to_statement  # noqa: E402
 
 # The Day 1 pair is chosen by hand, not by a retrieval method.
 PAIR_METHOD = "manual"
 
 
 def main() -> None:
+    args = parse_pair_args()
     with SessionLocal() as db:
-        (chunk_a, doc_a), (chunk_b, doc_b) = (load_chunk(db, f) for f in PAIR_FILENAMES)
+        (chunk_a, doc_a), (chunk_b, doc_b) = load_pair(db, args)
         a, b = to_statement(chunk_a, doc_a), to_statement(chunk_b, doc_b)
         print(f"Pair: chunk A {chunk_a.id} ({a.document}, p.{a.page})")
         print(f"      chunk B {chunk_b.id} ({b.document}, p.{b.page})")
