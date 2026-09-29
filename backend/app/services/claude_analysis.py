@@ -32,6 +32,13 @@ class ContradictionVerdict(BaseModel):
 
 @dataclass
 class Statement:
+    """One side of a comparison sent to Claude.
+
+    In the current implementation a statement is a chunk: text is the full text of one
+    stored chunk (not a sentence extracted from it), and document/page/section are that
+    chunk's source metadata.
+    """
+
     text: str
     document: str
     page: int | None

@@ -1,22 +1,19 @@
 # Local development only. Credentials are intentionally simple.
+# This container is Double-Take's only database; backend/.env DATABASE_URL points at it.
 services:
   db:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:pg18
     container_name: double-take-db
-    restart: unless-stopped
     environment:
-      POSTGRES_DB: doubletake
-      POSTGRES_USER: doubletake
-      POSTGRES_PASSWORD: doubletake
+      POSTGRES_DB: double_take
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U doubletake -d doubletake"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      # pg18 images keep data under /var/lib/postgresql/18/, so mount the parent directory.
+      - pgdata:/var/lib/postgresql
 
 volumes:
   pgdata:
+    name: double-take-pgdata

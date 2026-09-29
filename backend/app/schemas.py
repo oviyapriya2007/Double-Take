@@ -26,6 +26,7 @@ class AnalysisResult(BaseModel):
     evidence: list[Evidence] | None
     candidate_pair_id: uuid.UUID | None
     method: str | None
+    # A statement is a whole chunk: these are the two chunks that were sent to Claude.
     statement_a: ChunkSource | None
     statement_b: ChunkSource | None
     created_at: datetime | None
