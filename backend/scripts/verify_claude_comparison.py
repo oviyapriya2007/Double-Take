@@ -1,11 +1,11 @@
 """Day 1 hardcoded pair: send two manually chosen chunks to Claude.
 
 Each chunk is picked from the newest stored copy of a PDF by a phrase that must match
-exactly one of its chunks. With no arguments, the XR-200 temperature pair is used.
+exactly one of its chunks. With no arguments, the XR-500 C.pdf / D.pdf maximum-pressure
+pair is used.
 
-    python scripts/verify_claude_comparison.py --a C.pdf --b D.pdf \
-        --phrase-a "Maximum System Operating Pressure" \
-        --phrase-b "Fluid System Maximum Pressure Rating"
+    python scripts/verify_claude_comparison.py --a A.pdf --b C.pdf \
+        --phrase "Ambient Temperature"
 """
 
 import argparse
@@ -20,22 +20,22 @@ from app.database import SessionLocal  # noqa: E402
 from app.models import Chunk, Document  # noqa: E402
 from app.services.claude_analysis import Statement, compare_statements  # noqa: E402
 
-DEFAULT_A = "sample_manual.pdf"
-DEFAULT_B = "sample_manual_b.pdf"
-DEFAULT_PHRASE = "Operating temperature"
+DEFAULT_A = "C.pdf"
+DEFAULT_B = "D.pdf"
+DEFAULT_PHRASE_A = "Maximum System Operating Pressure"
+DEFAULT_PHRASE_B = "Fluid System Maximum Pressure Rating"
 
 
 def parse_pair_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare two manually chosen chunks.")
     parser.add_argument("--a", default=DEFAULT_A, help="filename of document A")
     parser.add_argument("--b", default=DEFAULT_B, help="filename of document B")
-    parser.add_argument("--phrase", default=DEFAULT_PHRASE,
-                        help="text identifying the chunk in both documents")
+    parser.add_argument("--phrase", help="text identifying the chunk in both documents")
     parser.add_argument("--phrase-a", help="text identifying the chunk in A (overrides --phrase)")
     parser.add_argument("--phrase-b", help="text identifying the chunk in B (overrides --phrase)")
     args = parser.parse_args()
-    args.phrase_a = args.phrase_a or args.phrase
-    args.phrase_b = args.phrase_b or args.phrase
+    args.phrase_a = args.phrase_a or args.phrase or DEFAULT_PHRASE_A
+    args.phrase_b = args.phrase_b or args.phrase or DEFAULT_PHRASE_B
     return args
 
 
@@ -77,6 +77,11 @@ def to_statement(chunk: Chunk, document: Document) -> Statement:
         document=document.filename,
         page=chunk.page_number,
         section=chunk.section,
+        entities=[
+            (entity.entity_type, entity.entity_text)
+            for entity in sorted(chunk.entities, key=lambda e: e.start_char or 0)
+            if entity.entity_type and entity.entity_text
+        ],
     )
 
 
@@ -89,6 +94,7 @@ def main() -> None:
     for label, chunk, s in (("A", chunk_a, a), ("B", chunk_b, b)):
         print(f"Statement {label}: chunk {chunk.id} | {s.document}, page {s.page}")
         print("  " + s.text.replace("\n", "\n  "))
+        print(f"  entities: {s.entities}")
     print("\nCalling Claude...\n")
 
     result = compare_statements(a, b)

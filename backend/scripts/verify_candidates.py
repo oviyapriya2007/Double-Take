@@ -7,12 +7,15 @@ Uses the chunks' stored embeddings (Task 3) and entities (Task 1), selects cross
 candidate pairs with the combined retrieval score, and stores them in candidate_pairs
 (method "combined"). Rerunning updates the same rows instead of adding duplicates.
 The scores only say which pairs are worth comparing, not whether they contradict.
+
+The check is blind: it knows nothing about which contradictions the documents contain. It
+prints the top candidates with the full text of both chunks for manual inspection.
 """
 
 import argparse
 import math
-import re
 import sys
+import textwrap
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -24,9 +27,10 @@ from app.database import SessionLocal  # noqa: E402
 from app.models import CandidatePair, Chunk, ContradictionResult, Document  # noqa: E402
 from app.retrieval.candidates import (  # noqa: E402
     CANDIDATE_METHOD,
-    TOP_K_PER_CHUNK,
+    MAX_CANDIDATES,
     W_EMBEDDING,
     W_ENTITY,
+    W_TECHNICAL,
     W_TFIDF,
     Candidate,
     generate_candidates,
@@ -34,16 +38,7 @@ from app.retrieval.candidates import (  # noqa: E402
 from app.services.candidate_storage import store_candidates  # noqa: E402
 from app.services.entity_storage import load_entity_types  # noqa: E402
 
-# Conflicting values planted in the XR-500 demo documents. A candidate "covers" a topic when
-# its two chunks mention different values from the same list. Used only to inspect the
-# output; it plays no part in selecting candidates.
-KNOWN_CONFLICTS = {
-    "maximum pressure": ["2.8 MPa", "3.5 MPa", "1.8 MPa"],
-    "minimum flow rate": ["40 L/min", "50 L/min"],
-    "ambient temperature": ["50°C", "55°C"],
-}
-PAIRS_PER_TOPIC = 5
-SNIPPET_CHARS = 70
+TEXT_WIDTH = 100
 
 
 def one_line(text: str) -> str:
@@ -52,11 +47,6 @@ def one_line(text: str) -> str:
 
 def location(chunk: Chunk) -> str:
     return f"{chunk.document.filename} p{chunk.page_number}"
-
-
-def values_in(text: str, values: list[str]) -> set[str]:
-    text = one_line(text)
-    return {v for v in values if re.search(rf"(?<![\d.]){re.escape(v)}", text)}
 
 
 def load_chunks(db) -> list[Chunk]:
@@ -79,32 +69,16 @@ def method_counts(db) -> tuple[int, int]:
 
 
 def print_candidate(rank: int, c: Candidate) -> None:
-    print(f"\n#{rank:<3} combined {c.combined_score:.3f} | tfidf {c.tfidf_score:.3f}  "
-          f"embedding {c.embedding_score:.3f}  entity {c.entity_overlap:.3f} | "
-          f"{location(c.chunk_a)} <-> {location(c.chunk_b)}")
-    for chunk in (c.chunk_a, c.chunk_b):
-        print(f"     {location(chunk):<10} {one_line(chunk.text)[:SNIPPET_CHARS]}...")
-
-
-def print_known_conflicts(candidates: list[Candidate]) -> list[str]:
-    """Print which candidates cover each known conflict; return the topics not covered."""
-    print("\n=== Known XR-500 conflicts among the candidates (inspection only, not a verdict) ===")
-    missing = []
-    for topic, values in KNOWN_CONFLICTS.items():
-        hits = []
-        for rank, c in enumerate(candidates, start=1):
-            a, b = values_in(c.chunk_a.text, values), values_in(c.chunk_b.text, values)
-            if a and b and a != b:
-                hits.append((rank, c, a, b))
-        status = f"{len(hits)} candidate pairs, best rank #{hits[0][0]}" if hits else "NOT FOUND"
-        print(f"\n{topic} ({' / '.join(values)}): {status}")
-        if not hits:
-            missing.append(topic)
-        for rank, c, a, b in hits[:PAIRS_PER_TOPIC]:
-            print(f"  #{rank:<3} combined {c.combined_score:.3f}   "
-                  f"{location(c.chunk_a)} [{', '.join(sorted(a))}]  <->  "
-                  f"{location(c.chunk_b)} [{', '.join(sorted(b))}]")
-    return missing
+    """Rank, both locations, the scores and the full text of both chunks."""
+    print(f"\n{'-' * TEXT_WIDTH}")
+    print(f"#{rank:<3} A: {location(c.chunk_a):<14} B: {location(c.chunk_b):<14} "
+          f"combined {c.combined_score:.3f}  (tfidf {c.tfidf_score:.3f}  "
+          f"embedding {c.embedding_score:.3f}  entity {c.entity_overlap:.3f}  "
+          f"technical {c.technical_compatibility:.3f})")
+    for label, chunk in (("A", c.chunk_a), ("B", c.chunk_b)):
+        print(f"  [{label}] {location(chunk)}")
+        print(textwrap.fill(one_line(chunk.text), width=TEXT_WIDTH,
+                            initial_indent="      ", subsequent_indent="      "))
 
 
 def check_stored(candidates: list[Candidate]) -> int:
@@ -139,7 +113,7 @@ def check_stored(candidates: list[Candidate]) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate, show and store candidate pairs.")
-    parser.add_argument("--top", type=int, default=20, help="number of candidates to print")
+    parser.add_argument("--top", type=int, default=15, help="number of candidates to print")
     args = parser.parse_args()
     sys.stdout.reconfigure(errors="replace")
 
@@ -162,21 +136,25 @@ def main() -> None:
         assert all(c.chunk_a.document_id != c.chunk_b.document_id for c in candidates), (
             "same-document pair generated"
         )
+        assert selection.scored_pairs == selection.cross_document_pairs, (
+            "some cross-document pairs were not given a combined score"
+        )
+        assert len(candidates) == min(MAX_CANDIDATES, selection.cross_document_pairs), (
+            "unexpected number of candidates selected"
+        )
 
-        print(f"\ncombined = {W_TFIDF} x TF-IDF + {W_EMBEDDING} x embedding "
-              f"+ {W_ENTITY} x entity-type overlap")
+        print(f"\ncombined = {1 - W_TECHNICAL:.2f} x ({W_TFIDF} x TF-IDF + {W_EMBEDDING} x embedding "
+              f"+ {W_ENTITY} x entity-type overlap) + {W_TECHNICAL} x technical compatibility")
         print(f"Total chunks:                    {len(chunks)}")
-        print(f"Cross-document pairs considered: {selection.cross_document_pairs}")
-        print(f"Shortlisted pairs:               {selection.shortlisted_pairs} "
-              f"(top {TOP_K_PER_CHUNK} embedding neighbours of each chunk)")
-        print(f"Candidates selected:             {len(candidates)}")
-        print("OK: no same-document pair was generated")
+        print(f"Cross-document pairs:            {selection.cross_document_pairs}")
+        print(f"Pairs with a combined score:     {selection.scored_pairs}")
+        print(f"Candidates selected:             {len(candidates)} (MAX_CANDIDATES = {MAX_CANDIDATES})")
+        print("OK: every cross-document pair was scored; no same-document pair was generated")
 
         print(f"\n=== Top {min(args.top, len(candidates))} candidates by combined score ===")
         for rank, candidate in enumerate(candidates[:args.top], start=1):
             print_candidate(rank, candidate)
-
-        missing = print_known_conflicts(candidates)
+        print("-" * TEXT_WIDTH)
 
         before, others_before = method_counts(db)
         store_candidates(db, candidates)
@@ -187,10 +165,6 @@ def main() -> None:
     print(f"\ncandidate_pairs with method '{CANDIDATE_METHOD}': {before} rows before, {after} after "
           f"(other methods: {others_before} before, {others_after} after)")
     print(f"OK: {stored} candidate pairs stored once each, cross-document, scores match the generated ones")
-    if missing:
-        print(f"WARNING: known conflicts not among the candidates: {', '.join(missing)}")
-    else:
-        print("OK: the known pressure, flow-rate and temperature conflicts are all among the candidates")
 
 
 if __name__ == "__main__":
