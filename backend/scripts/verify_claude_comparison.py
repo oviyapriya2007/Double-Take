@@ -97,14 +97,14 @@ def main() -> None:
         print(f"  entities: {s.entities}")
     print("\nCalling Claude...\n")
 
-    result = compare_statements(a, b)
+    findings = compare_statements(a, b)
 
-    print("Parsed ContradictionVerdict (Pydantic validation passed):")
-    print(result.model_dump_json(indent=2))
-
-    for field in ("verdict", "topic", "reasoning", "confidence", "evidence"):
-        assert getattr(result, field) not in (None, "", []), f"missing {field}"
-    print("\nOK: verdict, topic, reasoning, confidence and evidence are all present")
+    print(f"Parsed {len(findings)} findings (Pydantic validation passed):")
+    for result in findings:
+        print(result.model_dump_json(indent=2))
+        for field in ("verdict", "topic", "reasoning", "confidence", "evidence"):
+            assert getattr(result, field) not in (None, "", []), f"missing {field}"
+    print("\nOK: every finding has verdict, topic, reasoning, confidence and evidence")
 
 
 if __name__ == "__main__":

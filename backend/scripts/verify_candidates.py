@@ -28,6 +28,7 @@ from app.models import CandidatePair, Chunk, ContradictionResult, Document  # no
 from app.retrieval.candidates import (  # noqa: E402
     CANDIDATE_METHOD,
     MAX_CANDIDATES,
+    MIN_COMBINED_SCORE,
     W_EMBEDDING,
     W_ENTITY,
     W_TECHNICAL,
@@ -139,8 +140,8 @@ def main() -> None:
         assert selection.scored_pairs == selection.cross_document_pairs, (
             "some cross-document pairs were not given a combined score"
         )
-        assert len(candidates) == min(MAX_CANDIDATES, selection.cross_document_pairs), (
-            "unexpected number of candidates selected"
+        assert len(candidates) <= min(MAX_CANDIDATES, selection.cross_document_pairs), (
+            "more candidates selected than the budget allows"
         )
 
         print(f"\ncombined = {1 - W_TECHNICAL:.2f} x ({W_TFIDF} x TF-IDF + {W_EMBEDDING} x embedding "
@@ -148,7 +149,8 @@ def main() -> None:
         print(f"Total chunks:                    {len(chunks)}")
         print(f"Cross-document pairs:            {selection.cross_document_pairs}")
         print(f"Pairs with a combined score:     {selection.scored_pairs}")
-        print(f"Candidates selected:             {len(candidates)} (MAX_CANDIDATES = {MAX_CANDIDATES})")
+        print(f"Candidates selected:             {len(candidates)} (MAX_CANDIDATES = {MAX_CANDIDATES}, "
+              f"MIN_COMBINED_SCORE = {MIN_COMBINED_SCORE})")
         print("OK: every cross-document pair was scored; no same-document pair was generated")
 
         print(f"\n=== Top {min(args.top, len(candidates))} candidates by combined score ===")

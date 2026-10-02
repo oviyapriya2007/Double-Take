@@ -19,11 +19,14 @@ contains B (case-insensitive substrings), to check where specific relationships 
 
 import argparse
 import csv
+import math
 import sys
 import textwrap
 from collections import Counter
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -40,6 +43,7 @@ from app.nlp.technical_claims import (  # noqa: E402
     technical_compatibility,
 )
 from app.nlp.tfidf import tfidf_similarity_matrix  # noqa: E402
+from app.retrieval import candidates as production  # noqa: E402
 from app.retrieval.candidates import (  # noqa: E402
     MAX_CANDIDATES,
     W_EMBEDDING,
@@ -160,10 +164,15 @@ def score_all_pairs(chunks: list[Chunk], entity_types: dict) -> list[ScoredPair]
 def check_all_scored(pairs: list[ScoredPair], chunks: list[Chunk], entity_types: dict) -> int:
     """Check that generate_candidates() scores every cross-document pair; return how many it scored.
 
-    With a budget as large as the number of pairs nothing can be dropped by selection, so
-    any pair missing from the result was filtered out before combined scoring.
+    With a budget as large as the number of pairs, no score floor and no per-document-pair
+    limit nothing can be dropped by selection, so any pair missing from the result was
+    filtered out before combined scoring. The limit is lifted only for this call.
     """
-    selection = generate_candidates(chunks, entity_types, max_candidates=len(pairs))
+    unlimited = partial(production.select_with_document_coverage, max_per_document_pair=math.inf)
+    with mock.patch.object(production, "select_with_document_coverage", unlimited):
+        selection = generate_candidates(
+            chunks, entity_types, max_candidates=len(pairs), min_score=-math.inf
+        )
     assert selection.cross_document_pairs == len(pairs), "cross-document pair count differs"
     assert selection.scored_pairs == len(pairs), "some pairs did not reach combined scoring"
     by_ids = {frozenset((chunks[p.i].id, chunks[p.j].id)): p for p in pairs}

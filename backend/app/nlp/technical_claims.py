@@ -3,7 +3,8 @@
 A chunk's claims are found with regular expressions only (no model, deterministic):
 
 - quantity:      a number or range with a unit ("8.0 bar", "-10°C to 55°C", "5% to 90%")
-- interval:      a quantity whose unit is a time unit ("every 1,000 hours", "36 months")
+- interval:      a quantity whose unit is a time unit ("every 1,000 hours", "36 months"),
+                 optionally after one modifier ("1,000 operating hours", "500 running hours")
 - specification: a hyphenated variant term next to a quantity ("5 A slow-blow")
 
 Units are not looked up in a list of physical quantities: whatever short token directly
@@ -38,6 +39,8 @@ TIME_UNITS = {
     **dict.fromkeys(["mo", "mos", "month", "months"], "month"),
     **dict.fromkeys(["yr", "yrs", "year", "years"], "year"),
 }
+TIME_MODIFIERS = ("operating", "running", "elapsed", "service")
+"""The only words allowed between a number and its time unit."""
 # Durations (timeouts, response times) are only compared with durations, and service
 # intervals only with service intervals, whatever the exact time unit.
 LONG_TIME_UNITS = {"hour", "day", "week", "month", "year"}
@@ -75,6 +78,9 @@ UNIT = r"°\s?[A-Za-z]|%|[A-Za-zµΩ][A-Za-zµΩ²³]*(?:[/·][A-Za-z]+)*"
 # Not part of an identifier such as "XR-500", "CR2032" or "v2.4.1".
 NUMBER = re.compile(r"(?<![\w.])(?<![A-Za-z]-)[-+−]?\d+(?:[.,]\d+)*")
 UNIT_AFTER = re.compile(rf"[ \t]*\n?[ \t]*({UNIT})(?![\w/·]|-[A-Za-z])")
+MODIFIED_UNIT_AFTER = re.compile(
+    rf"[ \t]*\n?[ \t]*(?i:{'|'.join(TIME_MODIFIERS)})[ \t]+({UNIT})(?![\w/·]|-[A-Za-z])"
+)
 RANGE_JOIN = re.compile(rf"[ \t]*(?:({UNIT})[ \t]*)?\n?[ \t]*(?:to|–|—|-|~)[ \t]*\n?[ \t]*")
 VARIANT_TERM = re.compile(r"(?<![\w-])[A-Za-z]{2,}(?:-[A-Za-z]{2,})+(?![\w-])")
 CONTEXT_WORD = re.compile(r"[A-Za-z]{3,}")
@@ -176,7 +182,10 @@ def _find_quantities(text: str) -> list[_Quantity]:
         unit_match = UNIT_AFTER.match(text, number.end())
         unit = _canonical_unit(unit_match.group(1)) if unit_match else None
         if unit is None:
-            continue
+            unit_match = MODIFIED_UNIT_AFTER.match(text, number.end())
+            unit = _canonical_unit(unit_match.group(1)) if unit_match else None
+            if unit not in TIME_UNITS.values():
+                continue
         start, is_range = number.start(), False
         if index:
             previous = numbers[index - 1]

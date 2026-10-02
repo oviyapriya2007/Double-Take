@@ -15,11 +15,11 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-sonnet-5"
-MAX_TOKENS = 1024
+MAX_TOKENS = 4096
 
 
 class ClaudeResponseError(ValueError):
-    """Claude's reply was still not a valid ContradictionVerdict after one retry.
+    """Claude's reply was still not a valid PairAnalysis after one retry.
 
     The pipeline can catch this and skip the pair.
     """
@@ -33,11 +33,19 @@ class Evidence(BaseModel):
 
 
 class ContradictionVerdict(BaseModel):
+    """One finding: the verdict for a single comparable claim shared by the two statements."""
+
     verdict: Literal["CONTRADICTION", "CONSISTENT", "UNCERTAIN"]
     topic: str
     reasoning: str
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: list[Evidence]
+
+
+class PairAnalysis(BaseModel):
+    """Claude's reply for one statement pair: zero or more findings, one per claim."""
+
+    findings: list[ContradictionVerdict]
 
 
 @dataclass
@@ -58,9 +66,14 @@ class Statement:
 
 
 SYSTEM_PROMPT = """You are a careful technical-documentation reviewer. You compare two \
-statements taken from technical documents and decide whether they contradict each other.
+statements taken from technical documents and decide, claim by claim, whether they \
+contradict each other.
 
-Verdicts (use exactly one):
+A finding covers exactly one independently comparable technical claim that both \
+statements address: one specification, value, range, limit, condition or requirement. \
+Statements often share several such claims, so a reply often has several findings.
+
+Verdicts (use exactly one per finding):
 - CONTRADICTION: both statements make incompatible factual claims about the same thing \
 (for example different values, ranges, conditions or requirements for the same \
 specification), so they cannot both be true.
@@ -69,6 +82,12 @@ specification), so they cannot both be true.
 statements are not actually describing the same thing.
 
 Rules:
+- Identify every independently comparable technical claim shared by the two statements \
+and return one finding per claim. Report every contradiction the supplied text supports; \
+do not stop after the first one.
+- Never combine unrelated claims into one finding. For example, a supply-voltage limit \
+and a temperature limit are two separate findings, even when both differ.
+- If the statements share no comparable claim at all, return an empty findings list.
 - Compare the actual claims, not how similar the wording is. Similar statements are not \
 automatically contradictory, and differently worded statements can still agree.
 - Base the judgment ONLY on the two supplied statements and their metadata. Do not use \
@@ -82,29 +101,42 @@ evidence on their own.
 Statement B (never from the metadata or entity lists), and its document/section/page must \
 be copied from that statement's metadata, using null where the metadata says "not given".
 - For CONTRADICTION or CONSISTENT, give at least one quote from each statement showing the \
-compared claims. For UNCERTAIN, quote whatever supports that conclusion, if anything.
-- topic is a short name for the compared claim, e.g. "maximum operating pressure".
-- confidence is a number between 0.0 and 1.0 expressing how sure you are of the verdict.
+compared claim. For UNCERTAIN, quote whatever supports that conclusion, if anything. A \
+finding's evidence must be about that finding's claim only.
+- topic is a short name for the claim compared in that finding, e.g. "maximum operating \
+pressure".
+- confidence is a number between 0.0 and 1.0 expressing how sure you are of that \
+finding's verdict.
 
 Respond with ONLY a JSON object, no markdown fences and no other text, in exactly this shape:
 {
-  "topic": "<short topic of the compared claim>",
-  "verdict": "CONTRADICTION" | "CONSISTENT" | "UNCERTAIN",
-  "reasoning": "<concise explanation comparing the claims>",
-  "confidence": <number 0.0-1.0>,
-  "evidence": [
-    {"document": "<document>", "section": "<section or null>", "page": <page or null>, \
+  "findings": [
+    {
+      "topic": "<short topic of the compared claim>",
+      "verdict": "CONTRADICTION" | "CONSISTENT" | "UNCERTAIN",
+      "reasoning": "<concise explanation comparing the claims>",
+      "confidence": <number 0.0-1.0>,
+      "evidence": [
+        {"document": "<document>", "section": "<section or null>", "page": <page or null>, \
 "quote": "<verbatim quote>"}
+      ]
+    }
   ]
-}"""
+}
+"findings" may contain zero, one or many findings."""
 
 TASK_INSTRUCTIONS = """Task:
-1. Determine whether Statement A and Statement B refer to the same technical topic or \
-specification.
-2. If they do, classify their relationship as exactly one of CONTRADICTION, CONSISTENT or \
-UNCERTAIN. If they do not, the verdict is UNCERTAIN.
-3. Base the judgment ONLY on the supplied text. Do not invent facts or evidence.
-4. Respond only with the JSON object described in the instructions."""
+1. Identify every independently comparable technical claim that Statement A and \
+Statement B both address (the same specification, parameter, limit, condition or \
+requirement).
+2. For each such claim, return one finding classified as exactly one of CONTRADICTION, \
+CONSISTENT or UNCERTAIN. If it is unclear whether both statements describe the same \
+thing, that finding's verdict is UNCERTAIN.
+3. Report every contradiction the supplied text supports. Do not stop after the first \
+one, and do not combine unrelated claims into one finding.
+4. If the statements share no comparable claim, return {"findings": []}.
+5. Base the judgment ONLY on the supplied text. Do not invent facts or evidence.
+6. Respond only with the JSON object described in the instructions."""
 
 RETRY_INSTRUCTION = """Your previous reply could not be parsed. Respond with ONLY the JSON \
 object described in the instructions: valid JSON with every required field, no markdown \
@@ -156,12 +188,17 @@ def _normalize(text: str) -> str:
     return " ".join(text.split())
 
 
-def _check_evidence_is_supplied(result: ContradictionVerdict, a: Statement, b: Statement) -> None:
+def _check_evidence_is_supplied(
+    findings: list[ContradictionVerdict], a: Statement, b: Statement
+) -> None:
     supplied = [_normalize(a.text), _normalize(b.text)]
-    for item in result.evidence:
-        quote = _normalize(item.quote)
-        if not any(quote in source for source in supplied):
-            raise ValueError(f"Evidence quote not found in the supplied statements: {item.quote!r}")
+    for finding in findings:
+        for item in finding.evidence:
+            quote = _normalize(item.quote)
+            if not any(quote in source for source in supplied):
+                raise ValueError(
+                    f"Evidence quote not found in the supplied statements: {item.quote!r}"
+                )
 
 
 def _ask_claude(content: str) -> tuple[str, dict]:
@@ -181,41 +218,41 @@ def _ask_claude(content: str) -> tuple[str, dict]:
     return raw, message.model_dump(mode="json")
 
 
-def _parse_verdict(raw: str) -> ContradictionVerdict:
-    """Raises json.JSONDecodeError or pydantic.ValidationError if raw is not a valid verdict."""
-    return ContradictionVerdict.model_validate(_extract_json(raw))
+def _parse_findings(raw: str) -> list[ContradictionVerdict]:
+    """Raises json.JSONDecodeError or pydantic.ValidationError if raw is not a valid PairAnalysis."""
+    return PairAnalysis.model_validate(_extract_json(raw)).findings
 
 
-def compare_statements(a: Statement, b: Statement) -> ContradictionVerdict:
-    """Ask Claude whether two statements contradict each other and return a validated verdict.
+def compare_statements(a: Statement, b: Statement) -> list[ContradictionVerdict]:
+    """Ask Claude which claims two statements share and whether each one contradicts.
 
-    A reply that is not valid JSON or does not match ContradictionVerdict is retried once.
-    Raises ClaudeResponseError if the retry fails too, and ValueError if the verdict cites
-    evidence that was not supplied.
+    Returns zero or more validated findings, one per comparable claim. A reply that is not
+    valid JSON or does not match PairAnalysis is retried once. Raises ClaudeResponseError if
+    the retry fails too, and ValueError if any finding cites evidence that was not supplied.
     """
-    result, _ = compare_statements_with_raw(a, b)
-    return result
+    findings, _ = compare_statements_with_raw(a, b)
+    return findings
 
 
 def compare_statements_with_raw(
     a: Statement, b: Statement
-) -> tuple[ContradictionVerdict, dict]:
+) -> tuple[list[ContradictionVerdict], dict]:
     """Same as compare_statements, but also returns Claude's full API response as a dict."""
     prompt = build_user_prompt(a, b)
     raw, response = _ask_claude(prompt)
     try:
-        result = _parse_verdict(raw)
+        findings = _parse_findings(raw)
     except (json.JSONDecodeError, ValidationError) as first_error:
         logger.warning("Claude reply could not be parsed, retrying once: %s", first_error)
         raw, response = _ask_claude(f"{prompt}\n\n{RETRY_INSTRUCTION}")
         try:
-            result = _parse_verdict(raw)
+            findings = _parse_findings(raw)
         except (json.JSONDecodeError, ValidationError) as exc:
             logger.error("Claude reply could not be parsed after one retry: %s; reply: %r",
                          exc, raw[:200])
             raise ClaudeResponseError(
-                f"Claude did not return a valid verdict after one retry: {raw[:200]!r}"
+                f"Claude did not return valid findings after one retry: {raw[:200]!r}"
             ) from exc
 
-    _check_evidence_is_supplied(result, a, b)
-    return result, response
+    _check_evidence_is_supplied(findings, a, b)
+    return findings, response

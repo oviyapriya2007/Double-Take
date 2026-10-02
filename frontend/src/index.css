@@ -1,1 +1,131 @@
 @import "tailwindcss";
+
+@theme {
+  --font-sans: "Sora", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+
+  /* Brand palette. Pink and purple lead; blue and cyan complement.
+     petal-300 #FBA7DB · iris-300 #BD9DDE · iris-500 #9579D0 · azure-400 #7EB9DB · aqua-300 #91DDEA
+     Darker steps exist for text and buttons that need readable contrast on white. */
+  --color-petal-50: #fff5fb;
+  --color-petal-100: #feeaf6;
+  --color-petal-200: #fdd3ed;
+  --color-petal-300: #fba7db;
+  --color-petal-400: #f88cce;
+  --color-petal-500: #ee6bb9;
+  --color-petal-600: #d14c9c;
+  --color-petal-700: #a93a7d;
+
+  --color-iris-50: #f8f5fd;
+  --color-iris-100: #f0e9fa;
+  --color-iris-200: #e0d2f3;
+  --color-iris-300: #bd9dde;
+  --color-iris-400: #a98ad7;
+  --color-iris-500: #9579d0;
+  --color-iris-600: #7a5cc0;
+  --color-iris-700: #6346a6;
+  --color-iris-800: #4e3786;
+  --color-iris-900: #3a2965;
+
+  --color-azure-50: #f2f8fc;
+  --color-azure-100: #e2f0f8;
+  --color-azure-200: #c5e1f1;
+  --color-azure-300: #a3cde6;
+  --color-azure-400: #7eb9db;
+  --color-azure-500: #5ea3cc;
+  --color-azure-600: #3f88b5;
+  --color-azure-700: #2f6d92;
+  --color-azure-800: #255673;
+
+  --color-aqua-50: #f2fbfd;
+  --color-aqua-100: #e3f7fa;
+  --color-aqua-200: #c4eef5;
+  --color-aqua-300: #91ddea;
+  --color-aqua-400: #6dcfe0;
+  --color-aqua-500: #45b9cd;
+  --color-aqua-600: #2f9bb0;
+  --color-aqua-700: #23798a;
+  --color-aqua-800: #1d6070;
+
+  --animate-indeterminate: indeterminate 1.6s ease-in-out infinite;
+
+  @keyframes indeterminate {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(250%);
+    }
+  }
+}
+
+@utility focus-ring {
+  @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-500;
+}
+
+@utility brand-gradient {
+  @apply bg-linear-to-r from-petal-300 via-iris-300 to-aqua-300;
+}
+
+@utility brand-gradient-strong {
+  @apply bg-linear-to-br from-petal-400 via-iris-500 to-azure-400;
+}
+
+@utility brand-text {
+  @apply bg-linear-to-r from-petal-500 via-iris-500 to-azure-500 bg-clip-text text-transparent;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-[#fbfafd] text-slate-900 antialiased;
+  }
+
+  ::selection {
+    @apply bg-petal-200 text-slate-900;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-iris-100 bg-white shadow-sm shadow-iris-900/5;
+  }
+
+  .btn-primary {
+    @apply focus-ring inline-flex items-center justify-center gap-2 rounded-lg bg-linear-to-r from-iris-600 to-petal-600 px-4 py-2 text-sm font-medium text-white shadow-sm shadow-iris-600/25 transition hover:from-iris-700 hover:to-petal-700 hover:shadow-md hover:shadow-petal-600/20 disabled:cursor-not-allowed disabled:bg-none disabled:bg-slate-300 disabled:shadow-none;
+  }
+
+  .btn-secondary {
+    @apply focus-ring inline-flex items-center justify-center gap-2 rounded-lg border border-iris-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm shadow-iris-900/5 transition hover:border-petal-300 hover:bg-petal-50 hover:text-iris-700 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-ghost {
+    @apply focus-ring inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-slate-500 transition hover:bg-iris-50 hover:text-iris-700 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-iris-100 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm shadow-iris-900/5 transition placeholder:text-slate-400 hover:border-iris-200 focus:border-iris-400 focus:ring-4 focus:ring-petal-100 focus:outline-none;
+  }
+
+  .link {
+    @apply font-medium text-iris-700 underline decoration-iris-300 underline-offset-2 transition-colors hover:text-petal-600 hover:decoration-petal-300;
+  }
+
+  .chip {
+    @apply inline-flex max-w-full items-center gap-1 rounded-md bg-iris-50/60 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-iris-100;
+  }
+
+  .eyebrow {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider text-iris-700 ring-1 ring-iris-200;
+  }
+
+  .page-title {
+    @apply text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl;
+  }
+
+  .section-heading {
+    @apply flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500 before:h-2 before:w-2 before:shrink-0 before:rounded-full before:bg-linear-to-br before:from-petal-400 before:to-iris-500;
+  }
+}

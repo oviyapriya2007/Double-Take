@@ -1,0 +1,12 @@
+{
+  "description": "Claims stated in both XR-500 manuals (plswork1.pdf, plswork2.pdf). Used by backend/scripts/diagnose_score_distribution.py to identify known related chunk pairs.",
+  "topics": {
+    "input voltage range": ["permitted input voltage range"],
+    "operating temperature": ["designed to operate at an ambient temperature"],
+    "ventilation clearance": ["minimum clearance of 100 mm"],
+    "maintenance interval": ["inspect the cooling fan and ventilation openings every"],
+    "flow rate": ["maintain the process flow rate"],
+    "power disconnect": ["disconnect the 24 V DC power supply"],
+    "wait before servicing": ["wait at least 5 minutes after disconnecting power"]
+  }
+}

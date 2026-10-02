@@ -1,0 +1,20 @@
+{
+  "description": "The 15 known E-I relationships tracked with scripts/diagnose_candidates.py --find during the candidate-generation work. Each {a, b} relates a pair when one chunk contains the 'a' phrase and the other the 'b' phrase, exactly like --find. Used by backend/scripts/diagnose_score_distribution.py.",
+  "topics": {
+    "pressure maximum (F-H)": {"a": "Process Fluid Pressure", "b": "Maximum System Pressure"},
+    "pressure limit register (G-H)": {"a": "PRESS_MAX", "b": "10.5 bar"},
+    "pressure trip (I-H)": {"a": "above 8.0 bar", "b": "10.5 bar"},
+    "operating temperature (E-H)": {"a": "-10°C to 55°C", "b": "-10°C to 40°C"},
+    "operating temperature (F-E)": {"a": "-10 to 45", "b": "-10°C to 55°C"},
+    "maximum temperature (I-H)": {"a": "threshold of 55°C", "b": "exceeds 40°C"},
+    "temperature trip (G-F)": {"a": "TEMP_TRIP_SET", "b": "-10 to 45"},
+    "maximum flow (H-F)": {"a": "Maximum Line Flow Rate", "b": "Volumetric Flow Rate"},
+    "flow target range (G-F)": {"a": "FLOW_TARGET", "b": "Volumetric Flow Rate"},
+    "voltage range (E-H)": {"a": "18.0 VDC to 32.0 VDC", "b": "30.0 VDC"},
+    "maximum voltage (F-H)": {"a": "Input Supply Voltage", "b": "30.0 VDC"},
+    "fuse type (E-I)": {"a": "slow-blow", "b": "Fast-Acting"},
+    "battery interval (F-I)": {"a": "CR2032", "b": "Backup Battery"},
+    "valve/seal overhaul (F-I)": {"a": "diaphragm overhaul", "b": "Seal Replacement Overhaul"},
+    "network timeout (G-I)": {"a": "NET_TIMEOUT_MS", "b": "3000 ms"}
+  }
+}

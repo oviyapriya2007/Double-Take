@@ -27,7 +27,7 @@ B = Statement(text="Fluid System Maximum Pressure Rating: 1.8 MPa (18 bar)", doc
 
 
 def verdict_json(quote_b: str = "1.8 MPa (18 bar)") -> str:
-    return json.dumps({
+    return json.dumps({"findings": [{
         "topic": "maximum operating pressure",
         "verdict": "CONTRADICTION",
         "reasoning": "3.5 MPa and 1.8 MPa cannot both be the maximum pressure.",
@@ -36,7 +36,7 @@ def verdict_json(quote_b: str = "1.8 MPa (18 bar)") -> str:
             {"document": "C.pdf", "section": None, "page": 1, "quote": "3.5 MPa (35 bar)"},
             {"document": "D.pdf", "section": None, "page": 1, "quote": quote_b},
         ],
-    })
+    }]})
 
 
 VALID = verdict_json()
@@ -64,14 +64,14 @@ def run(replies: list[str]) -> tuple[object, list[str]]:
 
 def main() -> None:
     outcome, prompts = run([VALID])
-    assert len(prompts) == 1 and outcome[0].verdict == "CONTRADICTION"
+    assert len(prompts) == 1 and outcome[0][0].verdict == "CONTRADICTION"
     print("OK: valid reply accepted without a retry")
 
     for label, bad in (("invalid JSON", NOT_JSON), ("schema-invalid", BAD_SCHEMA)):
         outcome, prompts = run([bad, VALID])
         assert len(prompts) == 2, f"{label}: expected one retry"
         assert RETRY_INSTRUCTION not in prompts[0] and prompts[1].endswith(RETRY_INSTRUCTION)
-        assert outcome[0].verdict == "CONTRADICTION" and outcome[1]["id"] == "fake-2"
+        assert outcome[0][0].verdict == "CONTRADICTION" and outcome[1]["id"] == "fake-2"
         print(f"OK: {label} reply retried once, retry result returned")
 
     outcome, prompts = run([NOT_JSON, BAD_SCHEMA])

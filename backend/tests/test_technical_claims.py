@@ -44,6 +44,34 @@ class ExtractionTest(unittest.TestCase):
         self.assertEqual((claim.kind, claim.unit, claim.framed), (INTERVAL, "hour", True))
         self.assertIn("bearing", claim.context)
 
+    def test_time_intervals_with_optional_modifier(self):
+        for text, claim_text, unit in (
+            ("Inspect the filter every 1000 hours.", "1000 hours", "hour"),
+            ("Inspect the filter every 1,000 hours.", "1,000 hours", "hour"),
+            ("Inspect the filter every 1,000 operating hours.", "1,000 operating hours", "hour"),
+            ("Replace the filter every 500 running hours.", "500 running hours", "hour"),
+            ("Wait at least 5 minutes after disconnecting power.", "5 minutes", "minute"),
+        ):
+            with self.subTest(text):
+                [claim] = extract_technical_claims(text)
+                self.assertEqual((claim.kind, claim.text, claim.unit), (INTERVAL, claim_text, unit))
+
+    def test_modified_interval_keeps_context_and_schedule_framing(self):
+        [claim] = extract_technical_claims(
+            "Inspect the cooling fan and ventilation openings every 1,000 operating hours."
+        )
+        self.assertTrue(claim.framed)
+        self.assertTrue({"cooling", "fan", "ventilation", "openings"} <= claim.context)
+        self.assertNotIn("operating", claim.context)
+
+    def test_unrelated_word_between_number_and_time_unit_is_not_an_interval(self):
+        for text in ("Inspect the filter every 1,000 additional hours.",
+                     "Inspect the filter every 1,000 pump hours."):
+            with self.subTest(text):
+                claims = extract_technical_claims(text)
+                self.assertNotIn(INTERVAL, {claim.kind for claim in claims})
+                self.assertNotIn("hour", {claim.unit for claim in claims})
+
     def test_specification_term_next_to_a_quantity(self):
         claims = extract_technical_claims("Relay contact: normally-open, rated 2 A")
         self.assertIn((SPECIFICATION, "normally-open"), {(c.kind, c.term) for c in claims})
@@ -73,6 +101,13 @@ class CompatibilityTest(unittest.TestCase):
         score = compatibility(
             "Replace the drive belt every 2,000 hours.",
             "Drive belt replacement interval: 6 months",
+        )
+        self.assertGreaterEqual(score, STRONG)
+
+    def test_two_inspection_intervals_in_operating_hours(self):
+        score = compatibility(
+            "Inspect the cooling fan and ventilation openings every 1,000 operating hours.",
+            "Inspect the cooling fan and ventilation openings every 500 operating hours.",
         )
         self.assertGreaterEqual(score, STRONG)
 

@@ -15,16 +15,18 @@ multi-topic chunks.
 
 1. Every pair of chunks from different documents is scored with combined_score; no signal
    filters pairs out before that.
-2. The pairs are ranked by combined_score and MAX_CANDIDATES pairs are kept: first
-   each document gets up to MIN_PAIRS_PER_DOCUMENT of its best-scoring pairs, then the rest
-   of the budget goes to the highest-scoring remaining pairs, at most
-   MAX_PAIRS_PER_DOCUMENT_PAIR from any one pair of documents while other pairs remain.
-   This stops a group of near-identical documents from taking the whole budget.
+2. The pairs are ranked by combined_score. Pairs below MIN_COMBINED_SCORE are dropped,
+   and up to MAX_CANDIDATES of the rest are kept best first, at most
+   MAX_PAIRS_PER_DOCUMENT_PAIR from any one pair of documents. This stops a group of
+   near-identical documents from taking the whole budget.
+3. A document left without any kept pair gets its highest-scoring pair, even below
+   MIN_COMBINED_SCORE, so every document is compared at least once.
 
 A high score only means two chunks probably describe the same subject. Whether they
 contradict each other is decided later by Claude, never here.
 """
 
+import os
 import uuid
 from collections import Counter
 from dataclasses import dataclass
@@ -48,8 +50,23 @@ three weights above in their 0.35 : 0.45 : 0.20 proportions, so the effective we
 0.28 TF-IDF, 0.36 embedding, 0.16 entity overlap and 0.20 technical compatibility."""
 
 MAX_CANDIDATES = 60
-MIN_PAIRS_PER_DOCUMENT = 3
 MAX_PAIRS_PER_DOCUMENT_PAIR = 5
+DEFAULT_MIN_COMBINED_SCORE = 0.15
+
+
+def configured_min_combined_score() -> float:
+    """The MIN_COMBINED_SCORE environment variable, or DEFAULT_MIN_COMBINED_SCORE if unset."""
+    value = os.getenv("MIN_COMBINED_SCORE", "").strip()
+    if not value:
+        return DEFAULT_MIN_COMBINED_SCORE
+    try:
+        return float(value)
+    except ValueError:
+        raise ValueError(f"MIN_COMBINED_SCORE must be a number, got {value!r}") from None
+
+
+MIN_COMBINED_SCORE = configured_min_combined_score()
+"""Pairs scoring below this are not selected, except as a document's coverage fallback."""
 
 
 @dataclass(frozen=True)
@@ -103,70 +120,68 @@ def embedding_similarity_matrix(chunks: list[Chunk]) -> np.ndarray:
 def select_with_document_coverage(
     ranked: list[Candidate],
     max_candidates: int,
-    min_per_document: int = MIN_PAIRS_PER_DOCUMENT,
+    min_score: float = MIN_COMBINED_SCORE,
     max_per_document_pair: int = MAX_PAIRS_PER_DOCUMENT_PAIR,
 ) -> list[Candidate]:
-    """Keep max_candidates of `ranked` (best first) while letting every document contribute.
+    """Keep at most max_candidates of `ranked` (best first) while every document contributes.
 
-    1. Coverage, in rounds 1..min_per_document: in round r, each document that is part of
-       fewer than r kept pairs adds its best-scoring pair not yet kept. A pair counts for
-       both of its documents. Picks within a round are added best first.
+    1. Drop pairs with combined_score below min_score.
     2. Fill by combined score, keeping at most max_per_document_pair pairs from any one
        pair of documents, so near-identical documents cannot take the whole budget.
-    3. If budget is still left, fill by combined score without that limit.
+    3. Coverage fallback: each document in no kept pair adds its highest-scoring pair from
+       the full ranked list, even below min_score. If the budget is full, the lowest-scoring
+       kept pairs whose documents stay covered make room; otherwise the best fallbacks win.
 
-    The result is best first.
+    Weak pairs never fill unused budget. The result is best first.
     """
     documents_of = [(c.chunk_a.document_id, c.chunk_b.document_id) for c in ranked]
-    pairs_by_document: dict[uuid.UUID | None, list[int]] = {}
-    for n, pair_documents in enumerate(documents_of):
-        for document_id in pair_documents:
-            pairs_by_document.setdefault(document_id, []).append(n)
 
-    kept: set[int] = set()
-    coverage: Counter = Counter()
-    for target in range(1, min_per_document + 1):
-        picks = set()
-        for document_id, indices in pairs_by_document.items():
-            if coverage[document_id] >= target:
-                continue
-            best = next((n for n in indices if n not in kept), None)
-            if best is not None:
-                picks.add(best)
-        for n in sorted(picks):
-            if len(kept) >= max_candidates:
-                break
-            kept.add(n)
-            coverage.update(documents_of[n])
-
-    per_document_pair = Counter(frozenset(documents_of[n]) for n in kept)
-    for n in range(len(ranked)):
+    kept: list[int] = []
+    per_document_pair: Counter = Counter()
+    for n, candidate in enumerate(ranked):
         if len(kept) >= max_candidates:
             break
+        if candidate.combined_score < min_score:
+            continue
         document_pair = frozenset(documents_of[n])
-        if n not in kept and per_document_pair[document_pair] < max_per_document_pair:
-            kept.add(n)
+        if per_document_pair[document_pair] < max_per_document_pair:
+            kept.append(n)
             per_document_pair[document_pair] += 1
 
-    for n in range(len(ranked)):
-        if len(kept) >= max_candidates:
-            break
-        kept.add(n)
+    coverage = Counter(document_id for n in kept for document_id in documents_of[n])
+    best_pair_of: dict[uuid.UUID | None, int] = {}
+    for n, pair_documents in enumerate(documents_of):
+        for document_id in pair_documents:
+            best_pair_of.setdefault(document_id, n)
+    fallback = sorted({n for document_id, n in best_pair_of.items() if not coverage[document_id]})
 
-    return [ranked[n] for n in sorted(kept)]
+    fallback = fallback[:max_candidates]
+    while len(kept) + len(fallback) > max_candidates:
+        removable = next(
+            (n for n in reversed(kept) if all(coverage[d] > 1 for d in documents_of[n])), None
+        )
+        if removable is None:
+            break
+        kept.remove(removable)
+        coverage.subtract(documents_of[removable])
+    fallback = fallback[:max_candidates - len(kept)]
+
+    return [ranked[n] for n in sorted(kept + fallback)]
 
 
 def generate_candidates(
     chunks: list[Chunk],
     entity_types: dict[uuid.UUID, set[str]],
     max_candidates: int = MAX_CANDIDATES,
+    min_score: float = MIN_COMBINED_SCORE,
 ) -> CandidateSelection:
     """Pick the cross-document chunk pairs worth sending to contradiction analysis.
 
     Every cross-document pair is scored, so the cost grows with the square of the number
     of chunks. entity_types maps a chunk id to the set of entity types stored for that
     chunk. In each pair, chunk_a is the chunk that comes first in `chunks`, so a fixed
-    input order gives the same pairs and order on every run.
+    input order gives the same pairs and order on every run. Pass min_score=-math.inf
+    with a large enough max_candidates to get every scored pair.
     """
     embedding_sim = embedding_similarity_matrix(chunks)
     tfidf_sim = tfidf_similarity_matrix([chunk.text for chunk in chunks])
@@ -194,7 +209,7 @@ def generate_candidates(
     ranked = [candidate for *_, candidate in scored]
 
     return CandidateSelection(
-        candidates=select_with_document_coverage(ranked, max_candidates),
+        candidates=select_with_document_coverage(ranked, max_candidates, min_score),
         cross_document_pairs=cross_document_pairs,
         scored_pairs=len(scored),
     )

@@ -21,11 +21,16 @@ from app.services.candidate_storage import store_candidates
 from app.services.claude_analysis import Statement, compare_statements_with_raw
 from app.services.embedding_storage import embed_and_store_chunks
 from app.services.entity_storage import extract_and_store_entities, load_entity_types
+from app.services.finding_deduplication import FindingKey, finding_key, stored_result_key
 from app.services.result_storage import store_contradiction_result
 
 logger = logging.getLogger(__name__)
 
 EntityMap = dict[uuid.UUID, list[tuple[str, str]]]
+
+
+class UnknownDocumentsError(ValueError):
+    """Some of the requested document ids do not exist."""
 
 
 @dataclass
@@ -34,8 +39,11 @@ class PipelineSummary:
     chunks: int
     candidates_processed: int = 0
     results_stored: int = 0
+    """Findings stored; one candidate pair can produce zero or more."""
     skipped_existing: int = 0
     """Candidate pairs that already had a stored result, so Claude was not called again."""
+    duplicates_skipped: int = 0
+    """Findings not stored because the same finding was already stored for these documents."""
     errors: int = 0
     """Candidate pairs skipped because retrieval, Claude, validation or storage failed."""
 
@@ -43,12 +51,17 @@ class PipelineSummary:
 def run_pipeline(db: Session, document_ids: list[uuid.UUID]) -> PipelineSummary:
     """Analyse the given documents for contradictions and store the results.
 
-    Commits after preparing chunks and candidate pairs, and again after each stored result,
-    so a rerun skips pairs that were already analysed. A failure on one candidate pair is
-    logged, rolled back and counted in `errors`; the remaining pairs are still processed.
+    Claude returns zero or more findings per candidate pair; each finding is stored as its
+    own result unless the same finding (see finding_deduplication) is already stored for
+    these documents, by an earlier pair of this run or by an earlier run. Commits after
+    preparing chunks and candidate pairs, and again after storing all findings of a pair,
+    so a rerun skips pairs that were already analysed. A pair that stores nothing (zero or
+    only duplicate findings) is therefore analysed again on a rerun. A failure on one
+    candidate pair is logged, rolled back (none of its findings are kept) and counted in
+    `errors`; the remaining pairs are still processed.
 
-    Raises ValueError if a document id is unknown or fewer than two of the documents have
-    chunks.
+    Raises UnknownDocumentsError (a ValueError) if a document id is unknown, and ValueError
+    if fewer than two of the documents have chunks.
     """
     chunks = _load_chunks(db, document_ids)
     _ensure_entities_and_embeddings(db, chunks)
@@ -59,6 +72,7 @@ def run_pipeline(db: Session, document_ids: list[uuid.UUID]) -> PipelineSummary:
     chunk_by_id = {chunk.id: chunk for chunk in chunks}
     entities = _load_entities(db, list(chunk_by_id))
     analysed = _pairs_with_results(db, pairs)
+    stored_keys = _stored_finding_keys(db, chunk_by_id)
     retriever = CrossDocumentRetriever(db=db)
     summary = PipelineSummary(
         documents=len({chunk.document_id for chunk in chunks}), chunks=len(chunks)
@@ -75,10 +89,21 @@ def run_pipeline(db: Session, document_ids: list[uuid.UUID]) -> PipelineSummary:
             context = retriever.retrieve_for_chunk(chunk_a)
             a = _statement(chunk_a, entities)
             b = _statement_from_context(chunk_b, context, entities)
-            result, raw_response = compare_statements_with_raw(a, b)
-            store_contradiction_result(db, pair_id, result, raw_response)
+            findings, raw_response = compare_statements_with_raw(a, b)
+            document_ids = (chunk_a.document_id, chunk_b.document_id)
+            pair_keys: set[FindingKey] = set()
+            for finding in findings:
+                key = finding_key(document_ids, finding)
+                if key in stored_keys or key in pair_keys:
+                    logger.debug("Skipping duplicate finding %r for pair %s", finding.topic, pair_id)
+                    continue
+                store_contradiction_result(db, pair_id, finding, raw_response)
+                pair_keys.add(key)
             db.commit()
-            summary.results_stored += 1
+            # Only committed findings count as stored, so a rolled-back pair blocks nothing.
+            stored_keys |= pair_keys
+            summary.results_stored += len(pair_keys)
+            summary.duplicates_skipped += len(findings) - len(pair_keys)
         except Exception:
             db.rollback()
             summary.errors += 1
@@ -93,7 +118,7 @@ def _load_chunks(db: Session, document_ids: list[uuid.UUID]) -> list[Chunk]:
     found = set(db.scalars(select(Document.id).where(Document.id.in_(unique_ids))))
     missing = [str(document_id) for document_id in unique_ids if document_id not in found]
     if missing:
-        raise ValueError(f"Unknown document ids: {', '.join(missing)}")
+        raise UnknownDocumentsError(f"Unknown document ids: {', '.join(missing)}")
 
     chunks = list(
         db.scalars(
@@ -152,6 +177,30 @@ def _pairs_with_results(db: Session, pairs: list[CandidatePair]) -> set[uuid.UUI
             )
         )
     )
+
+
+def _stored_finding_keys(db: Session, chunk_by_id: dict[uuid.UUID, Chunk]) -> set[FindingKey]:
+    """Dedup keys of the results already stored for candidate pairs between these chunks."""
+    chunk_ids = list(chunk_by_id)
+    rows = db.execute(
+        select(
+            CandidatePair.chunk_a_id,
+            CandidatePair.chunk_b_id,
+            ContradictionResult.verdict,
+            ContradictionResult.evidence,
+        )
+        .select_from(ContradictionResult)
+        .join(ContradictionResult.candidate_pair)
+        .where(CandidatePair.chunk_a_id.in_(chunk_ids), CandidatePair.chunk_b_id.in_(chunk_ids))
+    )
+    return {
+        stored_result_key(
+            (chunk_by_id[chunk_a_id].document_id, chunk_by_id[chunk_b_id].document_id),
+            verdict,
+            evidence,
+        )
+        for chunk_a_id, chunk_b_id, verdict, evidence in rows
+    }
 
 
 def _statement(chunk: Chunk, entities: EntityMap) -> Statement:

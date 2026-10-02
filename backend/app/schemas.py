@@ -2,9 +2,37 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.claude_analysis import Evidence
+
+
+class DocumentInfo(BaseModel):
+    id: uuid.UUID
+    filename: str
+    title: str | None
+    doc_type: str | None
+    uploaded_at: datetime | None
+    chunk_count: int
+
+
+class UploadedDocument(DocumentInfo):
+    page_count: int
+    """Pages with extractable text."""
+
+
+class AnalysisRunRequest(BaseModel):
+    document_ids: list[uuid.UUID] = Field(min_length=2)
+
+
+class AnalysisRunSummary(BaseModel):
+    document_ids: list[uuid.UUID]
+    documents: int
+    chunks: int
+    candidates_processed: int
+    results_stored: int
+    skipped_existing: int
+    errors: int
 
 
 class ChunkSource(BaseModel):
@@ -12,6 +40,7 @@ class ChunkSource(BaseModel):
     document_id: uuid.UUID | None
     filename: str | None
     title: str | None
+    doc_type: str | None
     section: str | None
     page_number: int | None
     text: str
